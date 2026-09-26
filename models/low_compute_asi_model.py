@@ -173,12 +173,14 @@ INPUTS = [
     ("log_k", "uniform", 0.0, 1.0,
      "log10 x, AI-era speed-up of small-scale progress",
      "Assumption; Forethought SIE ~12 OOM; Cunningham not self-sustaining; METR >2x (snippets) [red_team Q1,Q5]"),
-    # (10) Years from Sept 2026 to full automation of AI R&D (superhuman AI researcher). Median ~2032.3.
+    # (10) Years from Sept 2026 to full automation of AI R&D (superhuman AI researcher). Median ~2032.75.
     #      AIFP Q1-2026: full AI R&D automation median ~early 2031, 25th pct ~mid-2028 (snippet); METR:
     #      99% AI R&D automation median late 2032 (snippet); Metaculus "general AI" median Jan 2033, 25% by
     #      2029 (snippet); Cotra 2022: TAI 50% by 2040; AI Impacts 2023 survey: HLMI 50% by 2047, 10% by
-    #      2027. sigma_ln 0.9 gives p10 ~2028.5, p90 ~2044, covering the survey tail.
-    ("yrs_auto", "lognormal", 5.5, 0.9,
+    #      2027. sigma_ln 0.9 gives p10 ~2028.6 and p90 ~2046, which covers the survey tail. The median leans
+    #      toward the 2026 forecaster community (AIFP/METR/Metaculus) rather than the 2023 academic survey;
+    #      see the "Slow frontier" scenario for the survey-like alternative.
+    ("yrs_auto", "lognormal", 6.0, 0.9,
      "years from 2026.75 to full AI R&D automation",
      "AIFP ~2031, METR ~2032.9, Metaculus 2033, Cotra 2040, AI Impacts 2047 (snippets)"),
     # (11) Take-off gap from full AI R&D automation to ASI. Metaculus weak-AGI -> superintelligence
@@ -870,6 +872,26 @@ def print_s1(S, O):
     tot = sum(r[1] for r in rows if r[0] != "floor_f*")
     print("Sum of S1 over the 19 primitive inputs (P<=1e24/2040): %.2f  (1 - sum = interactions + event noise)" % tot)
 
+    # Practical VOI: how far the headline moves if evidence places an input in its low/middle/high tercile.
+    print("\nTABLE 7b. Headline conditional on an input's tercile (what the answer becomes if evidence pins it)")
+    print("-" * 104)
+    print("%-10s | %-32s | %-32s | %s" % ("input", "P(<=1e24 by 2040): lo/mid/hi", "P(<=1e23 by 2040): lo/mid/hi",
+                                          "tercile cut-points"))
+    cols = [("floor_f*", _arr(fl)), ("yrs_auto", _arr(S["yrs_auto"])), ("log_lamA", _arr(S["log_lamA"])),
+            ("log_k", _arr(S["log_k"])), ("s_pre", _arr(S["s_pre"])), ("logM", _arr(S["logM"]))]
+    i24, i23 = _arr(ind24), _arr(ind23)
+    for name, xs in cols:
+        c1, c2 = quantiles(xs, (1 / 3, 2 / 3))
+        out24, out23 = [], []
+        for lo_b, hi_b in ((-INF, c1), (c1, c2), (c2, INF)):
+            m = [lo_b < x <= hi_b for x in xs]
+            nsel = sum(1 for v in m if v)
+            out24.append(sum(1 for v, s in zip(i24, m) if s and v) / max(1, nsel))
+            out23.append(sum(1 for v, s in zip(i23, m) if s and v) / max(1, nsel))
+        print("%-10s | %8s %8s %8s        | %8s %8s %8s        | %.2f / %.2f" %
+              (name, pct(out24[0]), pct(out24[1]), pct(out24[2]), pct(out23[0]), pct(out23[1]), pct(out23[2]),
+               c1, c2))
+
 
 SCENARIOS = [
     ("BASE (independent inputs)", {}, 0.0, False),
@@ -893,18 +915,71 @@ SCENARIOS = [
 def print_scenarios(n, use_numpy):
     print("\nTABLE 8. Scenarios (each re-sampled with the same seed; N=%d)" % n)
     print("-" * 124)
-    print("%-46s %8s %8s %8s %8s %8s %9s %7s %7s %7s" %
-          ("scenario", "24/2035", "24/2040", "24/2050", "23/2040", "21/2050", "first<=24", "D1", "D2", "D4"))
+    print("%-46s %8s %8s %8s %8s %8s %8s %9s %6s %6s %6s %6s" %
+          ("scenario", "24/2035", "24/2040", "24/2050", "23/2040", "21/2040", "21/2050", "first<=24",
+           "D1", "D2", "D3", "D4"))
     for label, ov, rho, fat in SCENARIOS:
         S = sample_world(n, SEED, use_numpy, ov, rho, fat)
         O = run_model(S, use_numpy)
         w, _ = direction_weights(O, 24, 2050.0)
-        print("%-46s %8s %8s %8s %8s %8s %9s %7s %7s %7s" %
+        print("%-46s %8s %8s %8s %8s %8s %8s %9s %6s %6s %6s %6s" %
               (label[:46], pct(mean_of(le(O["T24"], 2035.0))), pct(mean_of(le(O["T24"], 2040.0))),
                pct(mean_of(le(O["T24"], 2050.0))), pct(mean_of(le(O["T23"], 2040.0))),
-               pct(mean_of(le(O["T21"], 2050.0)), 2), pct(mean_of(strict_first(O, 24)), 2),
-               pct(w[0], 0), pct(w[1], 0), pct(w[3], 0)))
-    print("(D1/D2/D4 columns = direction weights conditional on <=1e24 by 2050)")
+               pct(mean_of(le(O["T21"], 2040.0)), 2), pct(mean_of(le(O["T21"], 2050.0)), 2),
+               pct(mean_of(strict_first(O, 24)), 2),
+               pct(w[0], 0), pct(w[1], 0), pct(w[2], 0), pct(w[3], 0)))
+    print("(D1/D2/D3/D4 columns = direction weights conditional on <=1e24 by 2050)")
+
+
+def print_consistency(n, use_numpy):
+    """Checks used to test the internal consistency of the round-2 subjective numbers."""
+    global PATH_A_FORMS, PATH_A_BASE
+    print("\nTABLE 9. Consistency checks against round 2 (N=%d each)" % n)
+    print("-" * 118)
+    S = sample_world(n, SEED, use_numpy)
+    O = run_model(S, use_numpy)
+    TF, T24 = _arr(O["TF"]), _arr(O["T24"])
+    fr = [t <= 2040 for t in TF]
+    a = sum(1 for f_, t in zip(fr, T24) if f_ and t <= 2040) / max(1, sum(fr))
+    b = sum(1 for f_, t in zip(fr, T24) if (not f_) and t <= 2040) / max(1, len(fr) - sum(fr))
+    print("(a) P(<=1e24 by 2040 | frontier ASI by 2040) = %s ; P(<=1e24 by 2040 | no frontier ASI by 2040) = %s"
+          % (pct(a), pct(b)))
+    q = quantiles(TF, (0.1, 0.25, 0.5, 0.75, 0.9))
+    qa = quantiles(_arr(O["TA"]), (0.1, 0.25, 0.5, 0.75, 0.9))
+    print("(b) Frontier ASI year p10/p25/p50/p75/p90: %.1f / %.1f / %.1f / %.1f / %.1f" % tuple(q))
+    print("    AI R&D automation year p10/p25/p50/p75/p90: %.1f / %.1f / %.1f / %.1f / %.1f" % tuple(qa))
+    srt = sorted(T24)
+    yrs = []
+    for p in (0.05, 0.10, 0.20, 0.30):
+        v = srt[int(p * len(srt))]
+        yrs.append("%d%% by %s" % (int(100 * p), "never" if math.isinf(v) else "%.1f" % v))
+    print("(c) Year at which P(<=1e24 ASI exists) reaches: " + "; ".join(yrs))
+    # (d) Which AI-led/human-led hazard ratio reproduces round 2's "~60% of discoveries are AI-led"?
+    print("(d) Scaling the AI-led hazard down: share of discoveries by 2040 that are AI-led, and the headline")
+    lamH_med = 10 ** ((math.log10(0.002) + math.log10(0.03)) / 2)
+    for r in (1, 2, 3, 5, 10):
+        lo, hi = math.log10(0.02 / r), math.log10(0.30 / r)
+        S2 = sample_world(n, SEED, use_numpy, {"log_lamA": ("uniform", lo, hi)})
+        O2 = run_model(S2, use_numpy)
+        d = [t <= 2040 for t in _arr(O2["Td"])]
+        nd = sum(d)
+        ai = sum(1 for x, e in zip(d, _arr(O2["engAI"])) if x and e) / max(1, nd)
+        med = 10 ** ((lo + hi) / 2)
+        print("    lamA/%-2d median %5.2f%%/yr (%4.1fx lamH): discovered by 2040 %s, AI-led %s, P(<=1e24 by 2040) %s"
+              % (r, 100 * med, med / lamH_med, pct(nd / len(d)), pct(ai), pct(mean_of(le(O2["T24"], 2040.0)))))
+    print("    Round-2 implied P(novel form | AI-found) = D4 13%% / AI engine 60%% = %.2f" % (0.13 / 0.60))
+    # (e) Mapping ambiguity: what if a discovered compact learner can never count as a cognitive core (D2)?
+    saved = (PATH_A_FORMS, PATH_A_BASE)
+    PATH_A_FORMS, PATH_A_BASE = [0, 2, 4, 6, 7], [x / 57.0 for x in (30, 15, 7, 3, 2)]
+    try:
+        S3 = sample_world(n, SEED, use_numpy)
+        w, _ = direction_weights(run_model(S3, use_numpy), 24, 2050.0)
+    finally:
+        PATH_A_FORMS, PATH_A_BASE = saved
+    w0, _ = direction_weights(O, 24, 2050.0)
+    print("(e) Direction weights (<=1e24 by 2050) if path-A learners may be D2 [base] vs may NOT be D2 [variant]:")
+    print("    " + "  ".join("%s %s/%s" % (DIRS[i][0], pct(w0[i], 0).strip(), pct(w[i], 0).strip())
+                             for i in range(len(DIRS))))
 
 
 def selftest():
@@ -969,6 +1044,7 @@ def main():
         print_tornado(rows, base)
         print_s1(S, O)
         print_scenarios(n_scen, use_numpy)
+        print_consistency(n_scen, use_numpy)
     print("\n[done in %.1f s]" % (time.time() - t_start))
 
 
