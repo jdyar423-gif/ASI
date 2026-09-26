@@ -96,11 +96,13 @@ ROUND2_WEIGHTS = [30, 24, 15, 13, 7, 6, 3, 2]
 ROUND2_HEADLINE = {"p24_2040": "20-25%", "p23_2040": "~6%", "p21_2040": "1-2%",
                    "first_low": "<=5%", "engine_ai": "~60%", "first_big": "~95%"}
 
-# Path-A forms when a HUMAN-led team discovers the learner: D1, D3, D5, D7, D8 in round-2 relative
-# proportions 30:15:7:3:2. CIRCULAR INPUT: inherited from round 2, not independent evidence. The model's own
-# contribution is the split BETWEEN paths and engines, not the split within path A.
-PATH_A_FORMS = [0, 2, 4, 6, 7]                     # indices into DIRS
-PATH_A_BASE = [30 / 57, 15 / 57, 7 / 57, 3 / 57, 2 / 57]
+# Path-A forms when the discovered learner resembles a human-named paradigm: D1, D2, D3, D5, D7, D8 in
+# round-2 relative proportions 30:24:15:7:3:2 (D6 is incremental by definition, so it is path B only; D4 is
+# the "unlike any named paradigm" outcome of AI-led discovery). CIRCULAR INPUT: inherited from round 2, not
+# independent evidence. The model's own contribution is the split BETWEEN paths and engines (which sets D4
+# and the D6 share), not the split within path A.
+PATH_A_FORMS = [0, 1, 2, 4, 6, 7]                  # indices into DIRS
+PATH_A_BASE = [x / 81.0 for x in (30, 24, 15, 7, 3, 2)]
 DIRICHLET_CONC = 20.0                              # per-world noise around the base split (assumption)
 
 # ---------------------------------------------------------------------------------------------
@@ -651,14 +653,16 @@ def tornado(S, use_numpy, base):
     """One-at-a-time sensitivity: pin each input at its sampled p10 and p90 (all other inputs and all
     event draws unchanged, i.e. common random numbers) and record the headline outcomes."""
     rows = []
+    n = len(S["E_exp"])
     for name in INPUT_NAMES:
         lo, hi = input_quantiles(S, name, (0.1, 0.9))
         res = {}
         for tag, val in (("lo", lo), ("hi", hi)):
             S2 = dict(S)
-            n = len(S["E_exp"])
             S2[name] = (np.full(n, val) if use_numpy else [val] * n)
-            res[tag] = headline(run_model(S2, use_numpy))
+            O2 = run_model(S2, use_numpy)
+            res[tag] = headline(O2)
+            res[tag]["dirw"] = direction_weights(O2, 24, 2050.0)[0]   # weights among <=1e24-by-2050 successes
         swing = abs(res["hi"]["p24_2040"] - res["lo"]["p24_2040"])
         rows.append((name, lo, hi, res["lo"], res["hi"], swing))
     rows.sort(key=lambda r: -r[5])
@@ -669,6 +673,18 @@ def first_order_index(S, indicator, name, bins=20):
     """Binned estimate of S1 = Var(E[I|X]) / Var(I): the share of the variance of the outcome indicator
     that would be removed if this input were known exactly (a value-of-information proxy). A finite-sample
     noise term is subtracted."""
+    if HAVE_NUMPY and isinstance(S[name], np.ndarray):
+        x = S[name]; I = np.asarray(indicator, dtype=float)
+        pbar = I.mean(); var = pbar * (1 - pbar)
+        if var <= 0:
+            return 0.0
+        chunks = np.array_split(I[np.argsort(x, kind="stable")], bins)
+        w = np.array([len(c) for c in chunks], dtype=float) / len(I)
+        mb = np.array([c.mean() for c in chunks])
+        nb = np.array([len(c) for c in chunks], dtype=float)
+        between = float(np.sum(w * (mb - pbar) ** 2))
+        noise = float(np.sum(w * mb * (1 - mb) / nb))
+        return max(0.0, (between - noise) / var)
     x = list(S[name]); I = [1.0 if v else 0.0 for v in indicator]
     n = len(x)
     order = sorted(range(n), key=lambda i: x[i])
@@ -805,6 +821,24 @@ def print_tornado(rows, base):
                pct(rl["p23_2040"]), pct(rh["p23_2040"]), pct(rl["first_low"], 1), pct(rh["first_low"], 1),
                100 * sw))
 
+    print("\nTABLE 6b. Direction-weight tornado: weights among <=1e24-by-2050 successes, input at p10 -> p90")
+    print("         (sorted by the largest swing in any of D1/D2/D4)")
+    print("-" * 104)
+    print("%-10s %-9s | %-17s | %-17s | %-17s | %-17s" %
+          ("input", "family", "D1 world-model", "D2 cog. core", "D4 AI-novel", "D6 mainstream"))
+    drows = []
+    for name, lo, hi, rl, rh, sw in rows:
+        a, b = rl["dirw"], rh["dirw"]
+        dsw = max(abs(b[i] - a[i]) for i in (0, 1, 3))
+        drows.append((dsw, name, a, b))
+    drows.sort(key=lambda r: -r[0])
+    for dsw, name, a, b in drows:
+        if dsw < 0.005:
+            continue
+        print("%-10s %-9s | %6s -> %6s | %6s -> %6s | %6s -> %6s | %6s -> %6s" %
+              (name, FAMILY[name], pct(a[0]), pct(b[0]), pct(a[1]), pct(b[1]), pct(a[3]), pct(b[3]),
+               pct(a[5]), pct(b[5])))
+
 
 def print_s1(S, O):
     ind24 = le(O["T24"], 2040.0)
@@ -815,7 +849,10 @@ def print_s1(S, O):
         rows.append((name, first_order_index(S, _arr(ind24), name), first_order_index(S, _arr(ind23), name),
                      first_order_index(S, _arr(indF), name)))
     # The floor as a single derived quantity (it cannot be measured component by component)
-    fl = [a + b - c for a, b, c in zip(_arr(S["logCbrain"]), _arr(S["logM"]), _arr(S["logE"]))]
+    if HAVE_NUMPY and isinstance(S["logCbrain"], np.ndarray):
+        fl = S["logCbrain"] + S["logM"] - S["logE"]
+    else:
+        fl = [a + b - c for a, b, c in zip(_arr(S["logCbrain"]), _arr(S["logM"]), _arr(S["logE"]))]
     S_tmp = {"floor_f": fl}
     rows.append(("floor_f*", first_order_index(S_tmp, _arr(ind24), "floor_f"),
                  first_order_index(S_tmp, _arr(ind23), "floor_f"), first_order_index(S_tmp, _arr(indF), "floor_f")))
@@ -844,6 +881,9 @@ SCENARIOS = [
     ("Fast frontier (AIFP-like, median ~2029)", {"yrs_auto": ("lognormal", 2.5, 0.6)}, 0.0, False),
     ("Brain-optimal: logE ~ N(-0.5, 0.5)", {"logE": ("normal", -0.5, 0.5)}, 0.0, False),
     ("Optimistic floor: logE ~ N(1.5, 1.0)", {"logE": ("normal", 1.5, 1.0)}, 0.0, False),
+    ("Slow AI discovery: lamA 0.5%-5%/yr",
+     {"log_lamA": ("uniform", math.log10(0.005), math.log10(0.05))}, 0.0, False),
+    ("Low novelty: p_novel ~ U(0.1, 0.3)", {"p_novel": ("uniform", 0.1, 0.3)}, 0.0, False),
 ]
 
 
