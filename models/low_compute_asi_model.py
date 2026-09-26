@@ -406,6 +406,9 @@ def model_np(S):
         out["viaA%d" % X] = tA <= tB
 
     # First ASI of any size: the frontier at TF, or path A once its cost fits under the frontier run size.
+    # Approximation: if the new learner is too big to train at Tav, we wait until its cost falls below the
+    # run size AT Tav (the frontier is held flat), which is conservative. In the ~0.1% of worlds where
+    # f > FC(Tav) this is slightly wrong; it is immaterial to every reported number.
     FCav = fc_np(Tav, S["fc_noise"])
     TAany = np.where(A0 <= FCav, Tav, ttd_np(Tav, A0 - FCav, TA, TF, r1, r2, r3))  # conservative
     Tfirst = np.minimum(TF, TAany)
